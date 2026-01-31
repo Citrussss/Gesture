@@ -35,43 +35,69 @@ class MainActivity : AppCompatActivity() {
             val metrics = result.metrics
             if (metrics != null) {
                 binding.gestureDebugDetail.visibility = android.view.View.VISIBLE
+                val p = metrics.primaryPx?.toInt()?.toString() ?: "-"
+                val o = metrics.offAxisPx?.toInt()?.toString() ?: "-"
+                val opp = metrics.oppositePx?.toInt()?.toString() ?: "-"
+                val end = metrics.endPrimaryPx?.toInt()?.toString() ?: "-"
+                val lin = metrics.linearity?.let { String.format("%.2f", it) } ?: "-"
                 binding.gestureDebugDetail.text =
-                    "p=${metrics.primaryPx.toInt()}px o=${metrics.offAxisPx.toInt()}px opp=${metrics.oppositePx.toInt()}px end=${metrics.endPrimaryPx.toInt()}px lin=${String.format("%.2f", metrics.linearity)} t=${metrics.durationMs}ms"
+                    "t=${metrics.durationMs}ms d=${metrics.netDistancePx.toInt()}px path=${metrics.totalPathPx.toInt()}px p=$p o=$o opp=$opp end=$end lin=$lin"
             } else {
                 binding.gestureDebugDetail.visibility = android.view.View.GONE
                 binding.gestureDebugDetail.text = ""
             }
 
-            if (gesture != null) {
-                val directionText = when (gesture.direction) {
-                    MultiFingerSwipeDetector.Direction.Up -> "上滑"
-                    MultiFingerSwipeDetector.Direction.Down -> "下滑"
-                    MultiFingerSwipeDetector.Direction.Left -> "左滑"
-                    MultiFingerSwipeDetector.Direction.Right -> "右滑"
-                }
-                binding.gestureDebugText.text = "${gesture.fingers}指 $directionText"
-            } else {
-                val reasonText = when (result.invalidReason) {
-                    MultiFingerSwipeDetector.InvalidReason.TooShort -> "位移太短"
-                    MultiFingerSwipeDetector.InvalidReason.OffAxis -> "偏移太大"
-                    MultiFingerSwipeDetector.InvalidReason.Reversed -> "中途反向"
-                    MultiFingerSwipeDetector.InvalidReason.EndMismatch -> "回弹太多"
-                    MultiFingerSwipeDetector.InvalidReason.Wiggly -> "轨迹不直"
-                    MultiFingerSwipeDetector.InvalidReason.Incomplete, null -> "数据不足"
+            when (result.kind) {
+                MultiFingerSwipeDetector.Kind.LongPress -> {
+                    if (gesture != null) {
+                        binding.gestureDebugText.text = "${gesture.fingers}指 长按"
+                    } else {
+                        val reasonText = when (result.invalidReason) {
+                            MultiFingerSwipeDetector.InvalidReason.HoldTooShort -> "未满5秒"
+                            MultiFingerSwipeDetector.InvalidReason.Moved -> "发生移动"
+                            MultiFingerSwipeDetector.InvalidReason.FingerChanged -> "手指数变化"
+                            MultiFingerSwipeDetector.InvalidReason.Incomplete, null -> "数据不足"
+                            else -> "无效"
+                        }
+                        binding.gestureDebugText.text = "${result.fingers}指 长按无效：$reasonText"
+                    }
                 }
 
-                val candidateText = when (result.candidateDirection) {
-                    MultiFingerSwipeDetector.Direction.Up -> "上滑"
-                    MultiFingerSwipeDetector.Direction.Down -> "下滑"
-                    MultiFingerSwipeDetector.Direction.Left -> "左滑"
-                    MultiFingerSwipeDetector.Direction.Right -> "右滑"
-                    null -> null
-                }
+                MultiFingerSwipeDetector.Kind.Swipe -> {
+                    if (gesture != null) {
+                        val directionText = when (gesture.direction) {
+                            MultiFingerSwipeDetector.Direction.Up -> "上滑"
+                            MultiFingerSwipeDetector.Direction.Down -> "下滑"
+                            MultiFingerSwipeDetector.Direction.Left -> "左滑"
+                            MultiFingerSwipeDetector.Direction.Right -> "右滑"
+                            null -> "滑动"
+                        }
+                        binding.gestureDebugText.text = "${gesture.fingers}指 $directionText"
+                    } else {
+                        val reasonText = when (result.invalidReason) {
+                            MultiFingerSwipeDetector.InvalidReason.TooShort -> "位移太短"
+                            MultiFingerSwipeDetector.InvalidReason.OffAxis -> "偏移太大"
+                            MultiFingerSwipeDetector.InvalidReason.Reversed -> "中途反向"
+                            MultiFingerSwipeDetector.InvalidReason.EndMismatch -> "回弹太多"
+                            MultiFingerSwipeDetector.InvalidReason.Wiggly -> "轨迹不直"
+                            MultiFingerSwipeDetector.InvalidReason.Incomplete, null -> "数据不足"
+                            else -> "无效"
+                        }
 
-                binding.gestureDebugText.text = if (candidateText != null) {
-                    "${result.fingers}指 无效：$reasonText（候选：$candidateText）"
-                } else {
-                    "${result.fingers}指 无效：$reasonText"
+                        val candidateText = when (result.candidateDirection) {
+                            MultiFingerSwipeDetector.Direction.Up -> "上滑"
+                            MultiFingerSwipeDetector.Direction.Down -> "下滑"
+                            MultiFingerSwipeDetector.Direction.Left -> "左滑"
+                            MultiFingerSwipeDetector.Direction.Right -> "右滑"
+                            null -> null
+                        }
+
+                        binding.gestureDebugText.text = if (candidateText != null) {
+                            "${result.fingers}指 滑动无效：$reasonText（候选：$candidateText）"
+                        } else {
+                            "${result.fingers}指 滑动无效：$reasonText"
+                        }
+                    }
                 }
             }
         }
