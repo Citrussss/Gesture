@@ -15,6 +15,7 @@ import kotlin.math.min
 class MultiFingerSwipeDetector(
     context: Context,
     private val onResult: (Result) -> Unit,
+    private val onTrace: ((CentroidTrace) -> Unit)? = null,
 ) {
     enum class Kind {
         Swipe,
@@ -66,6 +67,23 @@ class MultiFingerSwipeDetector(
         val metrics: Metrics?,
     )
 
+    data class CentroidSample(
+        val tMs: Long,
+        val x: Float,
+        val y: Float,
+    )
+
+    data class CentroidTrace(
+        val fingers: Int,
+        val startTimeMs: Long,
+        val endTimeMs: Long,
+        val samples: List<CentroidSample>,
+        val netDistancePx: Float,
+        val totalPathPx: Float,
+        val endKind: Kind,
+        val endInvalidReason: InvalidReason?,
+    )
+
     private val touchSlopPx = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
     private val minDistancePx = touchSlopPx * 7f
     private val maxOffAxisRatio = 0.25f
@@ -95,6 +113,9 @@ class MultiFingerSwipeDetector(
     private var startTimeMs: Long = 0L
     private var lastTimeMs: Long = 0L
     private var tracking = false
+
+    private val centroidSamples = ArrayList<CentroidSample>(256)
+    private var lastRecordedSampleTimeMs: Long = 0L
 
     fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -131,6 +152,8 @@ class MultiFingerSwipeDetector(
                 }
                 lastTimeMs = event.eventTime
 
+                recordSample(event.eventTime, current)
+
                 val prev = lastMoveCentroid
                 if (prev != null) {
                     totalPathPx += hypot(current.x - prev.x, current.y - prev.y)
@@ -150,6 +173,7 @@ class MultiFingerSwipeDetector(
                     cancelLongPressTimer()
                     longPressStillPossible = false
                     emitLongPressInvalid(trackingFingers ?: 0, InvalidReason.Moved)
+                    emitTraceAndReset(endKind = Kind.LongPress, endInvalidReason = InvalidReason.Moved)
                 }
 
                 if (dx > maxDx) maxDx = dx
@@ -162,11 +186,17 @@ class MultiFingerSwipeDetector(
             -> {
                 if (!tracking) return false
                 if (longPressTriggered) {
+                    emitTraceAndReset(endKind = Kind.LongPress, endInvalidReason = null)
                     reset()
                     return true
                 }
                 lastTimeMs = event.eventTime
                 lastCentroid = centroidForTrackingPointers(event) ?: lastCentroid
+
+                val current = lastCentroid
+                if (current != null) {
+                    recordSample(event.eventTime, current)
+                }
 
                 val fingers = trackingFingers
                 val remainingAfterUp = event.pointerCount - 1
@@ -177,6 +207,8 @@ class MultiFingerSwipeDetector(
                         if (fingers != null) {
                             emitLongPressInvalid(fingers, InvalidReason.FingerChanged)
                         }
+
+                        emitTraceAndReset(endKind = Kind.LongPress, endInvalidReason = InvalidReason.FingerChanged)
                         reset()
                         return true
                     }
@@ -189,16 +221,24 @@ class MultiFingerSwipeDetector(
             MotionEvent.ACTION_UP -> {
                 if (!tracking) return false
                 if (longPressTriggered) {
+                    emitTraceAndReset(endKind = Kind.LongPress, endInvalidReason = null)
                     reset()
                     return true
                 }
                 lastTimeMs = event.eventTime
                 lastCentroid = centroidForTrackingPointers(event) ?: lastCentroid
+
+                val current = lastCentroid
+                if (current != null) {
+                    recordSample(event.eventTime, current)
+                }
                 if (longPressStillPossible) {
                     val fingers = trackingFingers ?: 0
                     cancelLongPressTimer()
                     longPressStillPossible = false
                     emitLongPressInvalid(fingers, InvalidReason.HoldTooShort)
+
+                    emitTraceAndReset(endKind = Kind.LongPress, endInvalidReason = InvalidReason.HoldTooShort)
                     reset()
                     return true
                 }
@@ -232,9 +272,48 @@ class MultiFingerSwipeDetector(
         lastTimeMs = event.eventTime
         tracking = true
 
+        centroidSamples.clear()
+        lastRecordedSampleTimeMs = event.eventTime
+        val start = startCentroid
+        if (start != null) {
+            centroidSamples.add(CentroidSample(tMs = event.eventTime, x = start.x, y = start.y))
+        }
+
         longPressTriggered = false
         longPressStillPossible = true
         scheduleLongPress(fingers)
+    }
+
+    private fun recordSample(timeMs: Long, centroid: PointF) {
+        // Avoid recording too densely; centroid path is only used for custom gesture recognition.
+        if (timeMs == lastRecordedSampleTimeMs) return
+        lastRecordedSampleTimeMs = timeMs
+        centroidSamples.add(CentroidSample(tMs = timeMs, x = centroid.x, y = centroid.y))
+        if (centroidSamples.size > 800) {
+            // Keep memory bounded; drop older samples.
+            centroidSamples.removeAt(0)
+        }
+    }
+
+    private fun emitTraceAndReset(endKind: Kind, endInvalidReason: InvalidReason?) {
+        val callback = onTrace ?: return
+        val fingers = trackingFingers ?: return
+        val start = startCentroid ?: return
+        val end = lastCentroid ?: return
+
+        val netDistance = hypot(end.x - start.x, end.y - start.y)
+        callback(
+            CentroidTrace(
+                fingers = fingers,
+                startTimeMs = startTimeMs,
+                endTimeMs = lastTimeMs,
+                samples = centroidSamples.toList(),
+                netDistancePx = netDistance,
+                totalPathPx = totalPathPx,
+                endKind = endKind,
+                endInvalidReason = endInvalidReason,
+            ),
+        )
     }
 
     private fun scheduleLongPress(fingers: Int) {
@@ -456,6 +535,8 @@ class MultiFingerSwipeDetector(
             )
         }
 
+        emitTraceAndReset(endKind = Kind.Swipe, endInvalidReason = invalidReason)
+
         reset()
         return true
     }
@@ -478,5 +559,8 @@ class MultiFingerSwipeDetector(
 
         longPressStillPossible = false
         longPressTriggered = false
+
+        centroidSamples.clear()
+        lastRecordedSampleTimeMs = 0L
     }
 }
